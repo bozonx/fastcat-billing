@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fastcat-billing-server",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-03",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "billing-db",
+      "database_id": "YOUR_DATABASE_ID_HERE"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "YOUR_KV_NAMESPACE_ID_HERE"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
