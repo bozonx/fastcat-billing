@@ -1,0 +1,12 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+@theme {
+  --font-family-sans: "Inter", "Outfit", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-neutral-950 text-neutral-50;
+  }
+}
