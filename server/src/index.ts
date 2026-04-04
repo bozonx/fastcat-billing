@@ -1,94 +1,85 @@
 import { Hono } from 'hono'
-import { z } from 'zod'
-import { zValidator } from '@hono/zod-validator'
-import { v4 as uuidv4 } from 'uuid'
+import { cors } from 'hono/cors'
+import { jwt } from 'hono/jwt'
 import type { Bindings, Variables } from './types'
+
+// Импорт роутов
+import auth from './routes/auth'
+import user from './routes/user'
+import ai from './routes/ai'
+import stats from './routes/stats'
 
 const app = new Hono<{ Bindings: Bindings, Variables: Variables }>()
 
-// Middleware для проверки API ключа юзера
-app.use('*', async (c, next) => {
-  if (c.req.path === '/' || c.req.path === '/health') return await next()
+// CORS для фронтенда (в проде нужно ограничить)
+app.use('*', cors({
+  origin: '*', // Для MVP разрешаем всё, в проде лучше NUXT_PUBLIC_BASE_URL
+  allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
+  exposeHeaders: ['Content-Length'],
+  maxAge: 600,
+  credentials: true,
+}))
+
+// Глобальный Healthcheck
+app.get('/health', (c) => c.json({ status: 'ok', version: 'v1' }))
+
+// Роуты авторизации (без защиты)
+app.route('/api/v1/auth', auth)
+
+// Middleware для авторизации
+app.use('/api/v1/*', async (c, next) => {
+  // Пропускаем auth роуты (они уже обработаны выше отдельным app.route)
+  if (c.req.path.startsWith('/api/v1/auth')) return await next()
   
+  // 1. Проверка API ключа (для видеоредактора)
   const apiKey = c.req.header('X-API-Key')
-  if (!apiKey) {
-    return c.json({ error: 'Missing API Key' }, 401)
+  if (apiKey) {
+    const userData = await c.env.DB.prepare('SELECT id, email, name, balance, api_key FROM users WHERE api_key = ?')
+      .bind(apiKey)
+      .first<{ id: string; email: string; name: string; balance: number; api_key: string }>()
+
+    if (userData) {
+      c.set('user', userData)
+      return await next()
+    }
   }
 
-  // Проверка ключа в БД (D1)
-  const user = await c.env.DB.prepare('SELECT id, balance FROM users WHERE api_key = ?')
-    .bind(apiKey)
-    .first<{ id: string; balance: number }>()
-
-  if (!user) {
-    return c.json({ error: 'Invalid API Key' }, 401)
+  // 2. Проверка JWT токена (для личного кабинета)
+  const authHeader = c.req.header('Authorization')
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7)
+    try {
+      // Используем встроенный jwt.verify (через middleware или напрямую)
+      // Для простоты здесь сделаем проверку через jwt middleware "на лету" 
+      // или просто вручную через библиотеку hono/jwt:
+      const { verify } = await import('hono/jwt')
+      const payload = await verify(token, c.env.JWT_SECRET)
+      
+      if (payload && payload.id) {
+         const userData = await c.env.DB.prepare('SELECT id, email, name, balance, api_key FROM users WHERE id = ?')
+          .bind(payload.id)
+          .first<{ id: string; email: string; name: string; balance: number; api_key: string }>()
+          
+         if (userData) {
+           c.set('user', userData)
+           return await next()
+         }
+      }
+    } catch (e) {
+      return c.json({ error: 'Invalid or expired token' }, 401)
+    }
   }
 
-  c.set('user', user)
-  await next()
+  return c.json({ error: 'Unauthorized: Missing API Key or Bearer Token' }, 401)
 })
 
-app.get('/', (c) => {
-  return c.text('Fastcat Billing API is running')
-})
+// Защищенные роуты
+app.route('/api/v1/user', user)
+app.route('/api/v1/ai', ai)
+app.route('/api/v1/stats', stats)
 
-// Получение текущего баланса
-app.get('/balance', async (c) => {
-  const user = c.get('user')
-  return c.json({ balance: user.balance })
-})
-
-// Фиксация использования ресурса
-const usageSchema = z.object({
-  service_id: z.string(),
-  amount: z.number().positive(),
-  metadata: z.record(z.any()).optional(),
-})
-
-app.post('/usage', zValidator('json', usageSchema), async (c) => {
-  const user = c.get('user')
-  const { service_id, amount, metadata } = c.req.valid('json')
-
-  // Получаем стоимость услуги
-  const service = await c.env.DB.prepare('SELECT cost_per_unit FROM services WHERE id = ?')
-    .bind(service_id)
-    .first<{ cost_per_unit: number }>()
-
-  if (!service) {
-    return c.json({ error: 'Service not found' }, 404)
-  }
-
-  const cost = service.cost_per_unit * amount
-
-  // Проверка баланса
-  if (user.balance < cost) {
-    return c.json({ error: 'Insufficient balance' }, 402)
-  }
-
-  // Транзакция: обновление баланса и лог использования
-  const usageId = uuidv4()
-  const transId = uuidv4()
-
-  try {
-    // В D1 batch принимает массив PreparedStatements
-    await c.env.DB.batch([
-      c.env.DB.prepare('UPDATE users SET balance = balance - ? WHERE id = ?').bind(cost, user.id),
-      c.env.DB.prepare('INSERT INTO usage_logs (id, user_id, service_id, amount, cost, metadata) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(usageId, user.id, service_id, amount, cost, JSON.stringify(metadata || {})),
-      c.env.DB.prepare('INSERT INTO transactions (id, user_id, amount, description, type) VALUES (?, ?, ?, ?, ?)')
-        .bind(transId, user.id, -cost, `Usage: ${service_id}`, 'spend')
-    ])
-
-    return c.json({ 
-      success: true, 
-      cost, 
-      remaining_balance: user.balance - cost,
-      usage_id: usageId 
-    })
-  } catch (err: any) {
-    console.error('Billing error:', err)
-    return c.json({ error: 'Billing transaction failed', details: err.message }, 500)
-  }
-})
+// Старый роуты для обратной совместимости (опционально, но лучше убрать)
+app.get('/', (c) => c.text('Fastcat Billing API v1 is running'))
 
 export default app

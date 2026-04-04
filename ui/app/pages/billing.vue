@@ -1,13 +1,15 @@
 <script setup lang="ts">
+const { fetchApi } = useApi()
+const { user } = useAuth()
+
+const { data: transactions } = await useAsyncData('transactions', () => fetchApi('/user/transactions'), {
+  lazy: true,
+  server: false
+})
+
 const paymentMethods = [
   { id: 'pm-1', type: 'visa', last4: '4242', expiry: '06/28', default: true },
   { id: 'pm-2', type: 'mastercard', last4: '8811', expiry: '11/26', default: false }
-]
-
-const recentInvoices = [
-  { id: 'INV-2024-001', amount: '$420.50', date: 'March 2024', status: 'paid' },
-  { id: 'INV-2024-002', amount: '$150.00', date: 'February 2024', status: 'paid' },
-  { id: 'INV-2023-142', amount: '$85.20', date: 'January 2024', status: 'paid' }
 ]
 </script>
 
@@ -16,7 +18,7 @@ const recentInvoices = [
     <!-- Header Section -->
     <header class="flex items-center justify-between">
       <h2 class="text-3xl font-bold">Billing & Payments</h2>
-      <UButton label="Download All Invoices" icon="i-lucide-download" variant="outline" color="neutral" />
+      <UButton label="Download Statement" icon="i-lucide-download" variant="outline" color="neutral" />
     </header>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -50,31 +52,36 @@ const recentInvoices = [
           </div>
         </section>
 
-        <!-- Invoices Card -->
+        <!-- Transactions History Card -->
         <section class="space-y-4">
-          <h3 class="text-xl font-semibold">Invoices History</h3>
+          <h3 class="text-xl font-semibold">Transaction History</h3>
           <div class="border border-neutral-800 rounded-2xl overflow-hidden bg-neutral-900/50 backdrop-blur-sm">
             <table class="w-full text-left">
               <thead>
                  <tr class="border-b border-neutral-800">
-                    <th class="px-6 py-4 text-xs font-semibold text-neutral-400 uppercase tracking-widest">Invoice</th>
-                    <th class="px-6 py-4 text-xs font-semibold text-neutral-400 uppercase tracking-widest">Period</th>
+                    <th class="px-6 py-4 text-xs font-semibold text-neutral-400 uppercase tracking-widest">Transaction ID</th>
+                    <th class="px-6 py-4 text-xs font-semibold text-neutral-400 uppercase tracking-widest">Description</th>
                     <th class="px-6 py-4 text-xs font-semibold text-neutral-400 uppercase tracking-widest">Amount</th>
+                    <th class="px-6 py-4 text-xs font-semibold text-neutral-400 uppercase tracking-widest">Date</th>
                     <th class="px-6 py-4 text-xs font-semibold text-neutral-400 uppercase tracking-widest">Status</th>
-                    <th class="px-6 py-4"></th>
                  </tr>
               </thead>
               <tbody class="divide-y divide-neutral-800/50">
-                 <tr v-for="inv in recentInvoices" :key="inv.id" class="hover:bg-neutral-800/30 transition-colors">
-                    <td class="px-6 py-4 font-medium">{{ inv.id }}</td>
-                    <td class="px-6 py-4 text-sm text-neutral-400">{{ inv.date }}</td>
-                    <td class="px-6 py-4 font-mono">{{ inv.amount }}</td>
+                 <tr v-for="tx in transactions" :key="tx.id" class="hover:bg-neutral-800/30 transition-colors">
+                    <td class="px-6 py-4 text-xs font-mono text-neutral-400">{{ tx.id.substring(0, 8) }}...</td>
+                    <td class="px-6 py-4 font-medium">{{ tx.description }}</td>
+                    <td class="px-6 py-4 font-mono" :class="tx.amount < 0 ? 'text-red-400' : 'text-emerald-400'">
+                      {{ tx.amount > 0 ? '+' : '' }}${{ Math.abs(tx.amount).toFixed(2) }}
+                    </td>
+                    <td class="px-6 py-4 text-sm text-neutral-400">
+                      {{ new Date(tx.created_at).toLocaleDateString() }}
+                    </td>
                     <td class="px-6 py-4">
-                       <UBadge color="success" variant="soft" size="sm">{{ inv.status }}</UBadge>
+                       <UBadge color="success" variant="soft" size="sm">Completed</UBadge>
                     </td>
-                    <td class="px-6 py-4 text-right">
-                       <UButton icon="i-lucide-download" variant="ghost" color="neutral" size="sm" />
-                    </td>
+                 </tr>
+                 <tr v-if="!transactions || transactions.length === 0">
+                    <td colspan="5" class="px-6 py-12 text-center text-neutral-500">No transactions recorded yet.</td>
                  </tr>
               </tbody>
             </table>
@@ -88,7 +95,7 @@ const recentInvoices = [
         <UCard class="border-indigo-500/20 bg-indigo-600/5 relative overflow-hidden">
           <div class="absolute -right-12 -top-12 w-32 h-32 bg-indigo-500/10 rounded-full blur-3xl" />
           <h3 class="text-lg font-medium text-indigo-300 mb-1">Available Credits</h3>
-          <div class="text-4xl font-bold mb-6">$124.50</div>
+          <div class="text-4xl font-bold mb-6">${{ user?.balance?.toFixed(2) || '0.00' }}</div>
           <div class="space-y-4">
              <UButton label="Add Funds" color="primary" block size="lg" />
              <UButton label="Redeem Code" variant="ghost" color="neutral" block size="sm" />
@@ -100,15 +107,14 @@ const recentInvoices = [
 
         <!-- Billing Info -->
         <UCard class="border-neutral-800 bg-neutral-900/30">
-          <h4 class="font-semibold mb-4">Billing Contact</h4>
+          <h4 class="font-semibold mb-4">Account Information</h4>
           <div class="space-y-2 text-sm text-neutral-400">
-             <p>Ivan Ivanov</p>
-             <p>Tech Inc.</p>
-             <p>123 Startup St, Building B</p>
-             <p>Silicon Valley, CA 94000</p>
+             <p class="text-white font-medium">{{ user?.name }}</p>
+             <p>{{ user?.email }}</p>
+             <p class="text-xs mt-4 opacity-50">Member since {{ new Date(user?.created_at).toLocaleDateString() }}</p>
           </div>
           <template #footer>
-             <UButton label="Update Details" variant="ghost" color="neutral" block size="sm" />
+             <UButton label="Edit Settings" variant="ghost" color="neutral" block size="sm" to="/settings" />
           </template>
         </UCard>
       </div>

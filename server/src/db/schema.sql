@@ -4,6 +4,7 @@ CREATE TABLE users (
     name TEXT NOT NULL,
     email TEXT UNIQUE NOT NULL,
     api_key TEXT UNIQUE NOT NULL,
+    password_hash TEXT, -- Optional if we support social login later, but required for email/pass
     balance DECIMAL(10, 4) DEFAULT 0.0000,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
